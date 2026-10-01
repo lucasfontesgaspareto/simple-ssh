@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+<title>Simple SSH</title>
+<link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css">
+<style>
+  :root { --bg:#1e1f22; --panel:#2b2d31; --hover:#35373c; --line:#3a3c42; --text:#dcdde1; --muted:#8b8e96; --accent:#4f9dff; --err:#f06a6a; }
+  * { box-sizing:border-box; scrollbar-color:var(--line) transparent; scrollbar-width:thin; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:13px "Segoe UI", sans-serif; }
+  body { display:grid; grid-template-columns:auto 1fr; overflow:hidden; }
+  button { background:var(--hover); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:4px 10px; cursor:pointer; font:inherit; transition:border-color .12s, background .12s, transform .06s; }
+  button:hover:not(:disabled) { border-color:var(--accent); }
+  button:active:not(:disabled) { transform:scale(.95); }
+  button:disabled { opacity:.35; cursor:default; }
+  :focus-visible { outline:1px solid var(--accent); outline-offset:-1px; }
+  input { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:5px 8px; font:inherit; width:100%; }
+  input:focus { outline:none; border-color:var(--accent); }
+
+  aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; width:300px; min-width:220px; max-width:60vw; resize:horizontal; overflow:hidden; }
+  .side-tabs { display:flex; border-bottom:1px solid var(--line); }
+  .side-tabs button { flex:1; border:0; border-radius:0; background:none; padding:9px; color:var(--muted); border-bottom:2px solid transparent; }
+  .side-tabs button.on { color:var(--text); border-bottom-color:var(--accent); }
+  section { display:flex; flex-direction:column; gap:8px; padding:8px; min-height:0; flex:1; }
+  section[hidden] { display:none; }
+  .bar { display:flex; gap:6px; }
+  .scroll { overflow:auto; flex:1; min-height:0; }
+  details > summary { padding:3px 4px; cursor:pointer; color:var(--muted); user-select:none; }
+  details > :not(summary) { margin-left:14px; }
+  .row { padding:4px 6px; border-radius:4px; cursor:default; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:flex; gap:6px; align-items:center; transition:background .1s; user-select:none; }
+  .row:hover { background:var(--hover); }
+  .row:active { background:#3d4047; }
+  .row .size { margin-left:auto; color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+  .row .name { overflow:hidden; text-overflow:ellipsis; }
+  .row.sel { background:#2c3d55; box-shadow:inset 2px 0 var(--accent); }
+  #filelist:focus .row.sel { background:#30507a; }
+  #filelist:focus { outline:none; }
+  .ico { width:16px; height:16px; flex:none; color:var(--muted); }
+  .is-dir .ico { color:#e8c170; }
+  .file { animation:fade .15s ease-out; }
+  @keyframes fade { from { opacity:0; transform:translateY(-2px); } }
+  .nav .icon { width:30px; padding:4px 0; }
+  #crumbs { display:flex; align-items:center; gap:1px; min-height:29px; padding:2px 4px; background:var(--bg); border:1px solid var(--line); border-radius:4px; overflow-x:auto; scrollbar-width:none; cursor:text; white-space:nowrap; }
+  #crumbs[hidden], #cwd[hidden] { display:none; }
+  .crumb { border:0; background:none; padding:2px 5px; border-radius:3px; flex:none; }
+  .crumb:hover { background:var(--hover); }
+  .crumb:last-child { color:var(--accent); font-weight:600; }
+  .sep { color:var(--muted); }
+  #filelist { transition:opacity .15s; }
+  #filelist.loading { opacity:.5; pointer-events:none; }
+  #filelist.loading::before { content:''; position:sticky; top:0; display:block; height:2px; margin-bottom:-2px; background:linear-gradient(90deg, transparent, var(--accent), transparent) no-repeat; background-size:50% 100%; animation:bar 1s linear infinite; }
+  @keyframes bar { from { background-position:-100% 0; } to { background-position:200% 0; } }
+  .hint { color:var(--muted); padding:12px 6px; }
+  #files .scroll.drop { outline:2px dashed var(--accent); outline-offset:-4px; }
+
+  main { display:flex; flex-direction:column; min-width:0; min-height:0; }
+  #tabs { display:flex; background:var(--panel); border-bottom:1px solid var(--line); overflow-x:auto; min-height:34px; }
+  .tab { display:flex; align-items:center; gap:8px; padding:0 8px 0 12px; border-right:1px solid var(--line); cursor:pointer; white-space:nowrap; color:var(--muted); }
+  .tab.on { background:var(--bg); color:var(--text); }
+  .tab.dead { text-decoration:line-through; }
+  .tab .x { border:0; background:none; padding:0 4px; color:var(--muted); }
+  #terms { flex:1; position:relative; min-height:0; }
+  .term { position:absolute; inset:6px; display:none; }
+  .term.on { display:block; }
+  #empty { position:absolute; inset:0; display:grid; place-items:center; color:var(--muted); }
+
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:6px; width:420px; }
+  dialog::backdrop { background:#0008; }
+  dialog form { display:grid; gap:8px; }
+  dialog label { display:grid; gap:3px; color:var(--muted); font-size:12px; }
+  dialog .actions { display:flex; gap:6px; justify-content:flex-end; margin-top:6px; }
+  #f-delete { margin-right:auto; color:var(--err); }
+  #toast { position:fixed; right:16px; bottom:16px; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px 12px; opacity:0; transition:opacity .2s; pointer-events:none; max-width:420px; }
+  #toast.on { opacity:1; }
+</style>
+</head>
+<body>
+<aside>
+  <div class="side-tabs">
+    <button data-pane="conns" class="on">Sessões</button>
+    <button data-pane="files">Arquivos</button>
+  </div>
+  <section id="conns">
+    <div class="bar"><button id="new">+ Nova</button><button id="import">Importar</button><button id="export" title="Gera um .mxtsessions (abre aqui e no MobaXterm)">Exportar</button></div>
+    <input id="search" placeholder="Filtrar...">
+    <div id="tree" class="scroll"></div>
+  </section>
+  <section id="files" hidden>
+    <div class="bar nav">
+      <button id="back" class="icon" title="Voltar (Alt+←)" disabled>←</button>
+      <button id="fwd" class="icon" title="Avançar (Alt+→)" disabled>→</button>
+      <button id="up" class="icon" title="Pasta acima (Backspace)">↑</button>
+      <button id="refresh" class="icon" title="Atualizar (F5)" style="margin-left:auto">⟳</button>
+    </div>
+    <div id="crumbs" title="Clique no espaço vazio para digitar o caminho (Ctrl+L)"></div>
+    <input id="cwd" hidden spellcheck="false">
+    <div id="filelist" class="scroll" tabindex="0"></div>
+    <input id="picker" type="file" multiple hidden>
+  </section>
+</aside>
+<main>
+  <div id="tabs"></div>
+  <div id="terms"><div id="empty">Dê dois cliques numa conexão para abrir</div></div>
+</main>
+
+<dialog id="form">
+  <form method="dialog">
+    <input type="hidden" name="id">
+    <label>Nome <input name="name" required></label>
+    <label>Pasta (use \ para subpasta) <input name="folder" list="folders"></label>
+    <datalist id="folders"></datalist>
+    <div class="bar">
+      <label style="flex:1">Host <input name="host" required></label>
+      <label style="width:80px">Porta <input name="port" type="number" value="22" min="1" max="65535"></label>
+    </div>
+    <label>Usuário <input name="user" required></label>
+    <label>Chave privada
+      <div class="bar"><input name="keyPath"><button type="button" id="pick-key">...</button></div>
+    </label>
+    <div class="actions">
+      <button value="save" style="order:3">Salvar</button>
+      <button type="button" id="f-delete">Excluir</button>
+      <button value="cancel" formnovalidate>Cancelar</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="ask">
+  <form method="dialog">
+    <label><span id="ask-label"></span><input id="ask-input"></label>
+    <div class="actions"><button value="ok" style="order:2">OK</button><button value="cancel" formnovalidate>Cancelar</button></div>
+  </form>
+</dialog>
+
+<div id="toast"></div>
+<script src="node_modules/@xterm/xterm/lib/xterm.js"></script>
+<script src="node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+<script src="renderer.js"></script>
+</body>
+</html>
