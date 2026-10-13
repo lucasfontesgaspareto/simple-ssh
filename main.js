@@ -6,12 +6,12 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { Client } = require('ssh2');
 const moba = require('./mobaimport');
+const { KNOWN_HOSTS, checkHostKey, describeKey } = require('./knownhosts');
 
 const DB = path.join(app.getPath('userData'), 'connections.json');
 // O projeto se chamava sshforge: traz as conexões antigas na primeira execução.
 const OLD_DB = path.join(app.getPath('appData'), 'sshforge', 'connections.json');
 if (!fs.existsSync(DB) && fs.existsSync(OLD_DB)) { fs.mkdirSync(path.dirname(DB), { recursive: true }); fs.copyFileSync(OLD_DB, DB); }
-const KNOWN_HOSTS = path.join(os.homedir(), '.ssh', 'known_hosts');
 const sessions = new Map(); // tabId -> { conn, stream, sftp }
 let win;
 
@@ -20,35 +20,8 @@ const save = (list) => fs.writeFileSync(DB, JSON.stringify(list, null, 2));
 const emit = (...a) => win && !win.isDestroyed() && win.webContents.send(...a);
 const expand = (p) => p.replace(/%USERPROFILE%/gi, os.homedir());
 
-// ---------- known_hosts (formato OpenSSH, com suporte a entradas hasheadas |1|salt|hash) ----------
-
-function hostMatches(pattern, host) {
-  if (pattern.startsWith('|1|')) {
-    const [, , salt, hash] = pattern.split('|');
-    return crypto.createHmac('sha1', Buffer.from(salt, 'base64')).update(host).digest('base64') === hash;
-  }
-  return pattern.split(',').includes(host);
-}
-
-// 'ok' | 'unknown' | 'changed' — só compara chaves do mesmo tipo, igual ao OpenSSH
-function checkHostKey(host, type, b64) {
-  let lines = [];
-  try { lines = fs.readFileSync(KNOWN_HOSTS, 'utf8').split(/\r?\n/); } catch {}
-  let changed = false;
-  for (const l of lines) {
-    const [hosts, t, k] = l.trim().split(/\s+/);
-    if (!k || hosts.startsWith('#') || t !== type || !hostMatches(hosts, host)) continue;
-    if (k === b64) return 'ok';
-    changed = true;
-  }
-  return changed ? 'changed' : 'unknown';
-}
-
 async function verifyHost(c, key) {
-  const host = c.port === 22 ? c.host : `[${c.host}]:${c.port}`;
-  const type = key.subarray(4, 4 + key.readUInt32BE(0)).toString();
-  const b64 = key.toString('base64');
-  const fp = 'SHA256:' + crypto.createHash('sha256').update(key).digest('base64').replace(/=+$/, '');
+  const { host, type, b64, fp } = describeKey(c, key);
   const state = checkHostKey(host, type, b64);
   if (state === 'ok') return true;
   if (state === 'changed') {
